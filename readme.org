@@ -1,4 +1,4 @@
-# Created 2022-10-24 Mon 14:53
+# Created 2022-10-24 Mon 15:31
 #+title: Extreme value distributions for sports models
 #+author: Teddy Groves
 #+startup: overview
@@ -38,9 +38,13 @@ I thought I'd test this out with some sports data, and luckily there is a really
 nice baseball example on [[https://mc-stan.org/users/documentation/case-studies/pool-binary-trials.html][the Stan case studies website]], complete with [[https://github.com/stan-dev/example-models/blob/master/knitr/pool-binary-trials/baseball-hits-2006.csv][data from
 the 2006 Major league season]].
 
+What follows is some code that fetches this data and then uses Stan via
+[[https://cmdstanpy.readthedocs.io/][cmdstanpy]] to analyse it using a model with a latent generalised Pareto distribution for abilities. Check out this analysis's [[https://github.com/teddygroves/baseball][github repository]] for all the details.
+
 * Set up environment
 
-First we install record some python dependencies in the file ~requirements.txt~.
+These are the Python dependencies we are going to need. They should go in the
+file ~requirements.txt~.
 
 #+begin_src txt
 arviz
@@ -49,7 +53,7 @@ cmdstanpy
 matplotlib
 #+end_src
 
-These are some optional python libraries that I like to install:
+These are some optional python libraries that I like to install (the file is called ~requirements-tooling.txt~):
 
 #+begin_src txt
 ipython
@@ -67,7 +71,7 @@ pylsp-mypy
 pyls-isort
 #+end_src
 
-A ~.gitignore~ file.
+A ~.gitignore~ file:
 
 #+begin_src txt
 # ignore binary files
@@ -84,8 +88,6 @@ idata*
 # ignore dotfiles
 .*
 #+end_src
-
-Now we create a new virtual environment and install the dependencies there
 
 * Code for running the analysis
 
@@ -164,7 +166,7 @@ Since Stan doesn't implement the generalised pareto distribution yet we need to
 do so with a user-defined function. Luckily we can just copy the relevant code
 from the [[https://mc-stan.org/users/documentation/case-studies/gpareto_functions.html#conclusion-on-the-data-analysis][geomagnetic storms analysis]] and save it in the file ~gpareto.stan~.
 
-For this analysis we only need the function ~gpareto_lpdf~:
+For this analysis we only need the function ~gpareto_lpdf~, which goes in a file called ~gpareto.stan~.
 
 #+begin_src stan
 real gpareto_lpdf(vector y, real ymin, real k, real sigma) {
@@ -184,8 +186,10 @@ real gpareto_lpdf(vector y, real ymin, real k, real sigma) {
 
 * Define model with normal distribution for abilities
 
-The best performing model in the [[https://mc-stan.org/users/documentation/case-studies/pool-binary-trials.html][baseball case study]] looked like this (I removed
-some code to keep things simple).
+For a comparison I thought a good choice would be the best performing model from
+the original [[https://mc-stan.org/users/documentation/case-studies/pool-binary-trials.html][baseball case study]]. This model is a lot like the ones I used to use to analyse football (soccer) data and as we will see exhibits some of the problems that I ran into.
+
+I copied the code from the baseball case study into the file ~model-normal.stan~, deleting a little bit in order to keep things simple.
 
 #+begin_src stan
 data {
@@ -210,6 +214,10 @@ generated quantities {
 #+end_src
 
 * Define model with generalised pareto distribution for abilities
+
+The new model is mostly the same as the normal model, but the prior distribution for the latent ~alpha~ parameters is generalised pareto instead of normal.
+
+It goes in a file called ~model-gpareto.stan~.
 
 #+begin_src stan
 functions {
@@ -237,9 +245,9 @@ model {
 
 * Do sampling
 
-This code can go in a python script called ~sample.py~, and will run sampling
-for both models against the 2006 data, put the results in arviz objects and
-save them as ~json~ files.
+This code goes in a python script called ~sample.py~, and will run sampling for
+both models against the 2006 data, put the results in arviz objects and save
+them as ~json~ files.
 
 Note that this script hard-codes some minimum and maximum true batting averages
 that are required by the generalised pareto model. I think 0.5% and 99% are
@@ -261,6 +269,7 @@ SAMPLE_KWARGS = {
     "chains": 4,
     "iter_warmup": 1000,
     "iter_sampling": 1000,
+    "show_progress": False
 }
 SAMPLE_KWARGS_GPARETO = {
     "max_treedepth": 12,
@@ -268,6 +277,11 @@ SAMPLE_KWARGS_GPARETO = {
 }
 MIN_ALPHA = logit(0.005) # you probably need a true average >0.5% to get in the dataset
 MAX_ALPHA = logit(0.99)  # noone has a true average of 99%
+
+def get_summary(idata):
+    summary_ss = az.summary(idata.sample_stats, var_names=["lp", "diverging"])
+    summary_vars = az.summary(idata, var_names="~alpha", filter_vars="like")
+    return pd.concat([summary_ss, summary_vars])
 
 
 def main():
@@ -290,6 +304,7 @@ def main():
         print(f"Fitting model {name}")
         mcmc = model.sample(data=data_dict, **sample_kwargs)
         idata = az.from_cmdstanpy(mcmc)
+        print(get_summary(idata))
         idata_file = f"idata-{name}.json"
         print(f"Saving idata to {idata_file}")
         idata.to_json(idata_file)
@@ -298,59 +313,6 @@ def main():
 if __name__ == "__main__":
     main()
 #+end_src
-
-* Diagnostics
-
-The following code summarises the non-player-specific parameters from both model runs.
-
-#+begin_src jupyter-python
-import arviz as az
-
-diag_gpareto, diag_normal = (
-    az.summary(az.from_json(f"idata-{name}.json").sample_stats, var_names=["lp", "diverging"]) for name in ["gpareto", "normal"]
-)
-summary_gpareto, summary_normal = (
-    az.summary(az.from_json(f"idata-{name}.json"), var_names="~alpha", filter_vars="like")
-    for name in ["gpareto", "normal"]
-)
-display(pd.concat([diag_gpareto, summary_gpareto]))
-display(pd.concat([diag_normal, summary_normal]))
-#+end_src
-
-#+results: 
-:results:
-: /Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
-:   (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
-: /Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
-:   (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
-
-#+begin_example
-                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
-lp        -45785.478  13.237 -45811.700 -45762.800      0.362    0.256   
-diverging      0.000   0.000      0.000      0.000      0.000    0.000   
-sigma          4.956   0.259      4.462      5.433      0.003    0.002   
-k             -0.497   0.027     -0.546     -0.446      0.000    0.000   
-
-           ess_bulk  ess_tail  r_hat  
-lp           1345.0    2054.0    1.0  
-diverging    4000.0    4000.0    NaN  
-sigma       10207.0    3062.0    1.0  
-k            9790.0    3031.0    1.0  
-#+end_example
-#+begin_example
-                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
-lp        -45543.075  17.180 -45575.300 -45512.300      0.564    0.399   
-diverging      0.000   0.000      0.000      0.000      0.000    0.000   
-mu            -0.992   0.012     -1.016     -0.971      0.000    0.000   
-sigma          0.110   0.013      0.087      0.137      0.000    0.000   
-
-           ess_bulk  ess_tail  r_hat  
-lp            921.0    1911.0    1.0  
-diverging    4000.0    4000.0    NaN  
-mu           2795.0    2837.0    1.0  
-sigma        1548.0    2450.0    1.0  
-#+end_example
-:END:
 
 * Analyse
 

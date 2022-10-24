@@ -10,6 +10,7 @@ SAMPLE_KWARGS = {
     "chains": 4,
     "iter_warmup": 1000,
     "iter_sampling": 1000,
+    "show_progress": False
 }
 SAMPLE_KWARGS_GPARETO = {
     "max_treedepth": 12,
@@ -17,6 +18,11 @@ SAMPLE_KWARGS_GPARETO = {
 }
 MIN_ALPHA = logit(0.005) # you probably need a true average >0.5% to get in the dataset
 MAX_ALPHA = logit(0.99)  # noone has a true average of 99%
+
+def get_summary(idata):
+    summary_ss = az.summary(idata.sample_stats, var_names=["lp", "diverging"])
+    summary_vars = az.summary(idata, var_names="~alpha", filter_vars="like")
+    return pd.concat([summary_ss, summary_vars])
 
 
 def main():
@@ -39,6 +45,7 @@ def main():
         print(f"Fitting model {name}")
         mcmc = model.sample(data=data_dict, **sample_kwargs)
         idata = az.from_cmdstanpy(mcmc)
+        print(get_summary(idata))
         idata_file = f"idata-{name}.json"
         print(f"Saving idata to {idata_file}")
         idata.to_json(idata_file)
