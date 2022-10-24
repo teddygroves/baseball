@@ -1,4 +1,4 @@
-# Created 2022-10-24 Mon 12:17
+# Created 2022-10-24 Mon 13:00
 #+title: Extreme value distributions for sports models
 #+author: Teddy Groves
 #+startup: overview
@@ -303,54 +303,67 @@ each player's true batting average.
 
 #+begin_src jupyter-python
 import arviz as az
+import pandas as pd
 from matplotlib import pyplot as plt
 from scipy.special import expit
 
-ALPHA_FORESTPLOT_FILE = "alpha-forestplot.png"
+DATA_FILE = "baseball-hits-2006.csv"
+ALPHA_PLOT_FILE = "alpha-plot.png"
 
-def draw_alpha_forestplot():
+
+def draw_alpha_plot():
     idata_gpareto = az.from_json("idata-gpareto.json")
     idata_normal = az.from_json("idata-normal.json")
-    alpha_means_gpareto = idata_gpareto.posterior["alpha"].mean(("chain", "draw"))
-    alpha_means_normal = idata_normal.posterior["alpha"].mean(("chain", "draw"))
-    sorted_alphas_gpareto, sorted_alphas_normal = (
-        idata.posterior["alpha"].sortby(alpha_means).coords["alpha_dim_0"]
-        for idata, alpha_means in [
-            (idata_gpareto, alpha_means_gpareto),
-            (idata_normal, alpha_means_normal),
-        ]
+    data = pd.read_csv(DATA_FILE).copy()
+    alpha_qs_gpareto, alpha_qs_normal = (
+        idata.posterior["alpha"]
+        .quantile([0.05, 0.95], dim=("chain", "draw"))
+        .to_series()
+        .pipe(expit)
+        .unstack("quantile")
+        .add_prefix(name + "_")
+        for idata, name in zip([idata_gpareto, idata_normal], ["gpareto", "normal"])
     )
-    az.plot_forest(
-        [idata_gpareto, idata_normal],
-        model_names=["gpareto", "normal"],
-        var_names="alpha",
-        coords={"alpha_dim_0": sorted_alphas_normal},
-        kind="forestplot",
-        combined=True,
-        figsize=[7, 30],
-        transform=expit,
+    data = data.join(alpha_qs_gpareto).join(alpha_qs_normal)
+    f, ax = plt.subplots(figsize=[12, 5])
+    ax.scatter(data["K"], data["y"] / data["K"], label="Obs", color="black")
+    for model, color in [("gpareto", "tab:blue"), ("normal", "tab:orange")]:
+        ax.vlines(
+            data["K"],
+            data[f"{model}_0.05"],
+            data[f"{model}_0.95"],
+            label=model.capitalize() + " model 5%-95% posterior interval",
+            color=color,
+            zorder=0,
+        )
+    ax.set(
+        title="Observed vs modelled batting averages",
+        ylabel="Hit probability",
+        xlabel="Number of at-bats",
     )
-    f = plt.gcf()
-    ax = plt.gca()
-    ax.set_yticks([])
-    ax.set(ylabel="batter", xlabel="hit probability", title="Results comparison")
+    ax.legend(frameon=False)
     return f, ax
 
 
 if __name__ == "__main__":
-    f, ax = draw_alpha_forestplot()
-    f.savefig(ALPHA_FORESTPLOT_FILE, bbox_inches="tight")
+    f, ax = draw_alpha_plot()
+    f.savefig(ALPHA_PLOT_FILE, bbox_inches="tight")
 #+end_src
 
-[[file:./alpha-forestplot.png]]
+[[file:./alpha-plot.png]]
 
 From this plot we can see that the normal model is somewhat over-regularised: it
-thinks all the batters have a true average of about 0.3, which is wrong.
+thinks all the batters have a true average of about 0.3, which is unlikely.
 
 The generalised pareto model, on the other hand, has very big differences in how
-certain it is about particular players. It perhaps has a bit of the opposite
-problem, under-regularising to the point where it thinks that some players might
-have unrealistically high true averages in the 0.8+ range. However in my opinion
-it is closer to how you might intuitively respond to the data. If desired, more
-regularisation could be achieved by just adding a line like ~alpha ~
-normal(inv_logit(0.2), some-appropriate-sd);~.
+certain it is about particular players. The key thing is that it is far more
+uncertain about the players with fewer at-bats: this is the thing I had never
+been able to achieve before and made me pretty happy with this experiment.
+
+The generalised Pareto model perhaps has a bit of the opposite problem to the
+normal model, under-regularising to the point where it thinks that some players
+might have unrealistically high true averages in the 0.7+ range. However in my
+opinion it is still closer than the normal model to how you might intuitively
+respond to the data. If desired, more regularisation could be achieved by just
+adding a line like ~alpha ~ normal(inv_logit(0.2), some-appropriate-sd);~ to the
+Stan program.

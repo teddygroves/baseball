@@ -1,38 +1,46 @@
 import arviz as az
+import pandas as pd
 from matplotlib import pyplot as plt
 from scipy.special import expit
 
-ALPHA_FORESTPLOT_FILE = "alpha-forestplot.png"
+DATA_FILE = "baseball-hits-2006.csv"
+ALPHA_PLOT_FILE = "alpha-plot.png"
 
-def draw_alpha_forestplot():
+
+def draw_alpha_plot():
     idata_gpareto = az.from_json("idata-gpareto.json")
     idata_normal = az.from_json("idata-normal.json")
-    alpha_means_gpareto = idata_gpareto.posterior["alpha"].mean(("chain", "draw"))
-    alpha_means_normal = idata_normal.posterior["alpha"].mean(("chain", "draw"))
-    sorted_alphas_gpareto, sorted_alphas_normal = (
-        idata.posterior["alpha"].sortby(alpha_means).coords["alpha_dim_0"]
-        for idata, alpha_means in [
-            (idata_gpareto, alpha_means_gpareto),
-            (idata_normal, alpha_means_normal),
-        ]
+    data = pd.read_csv(DATA_FILE).copy()
+    alpha_qs_gpareto, alpha_qs_normal = (
+        idata.posterior["alpha"]
+        .quantile([0.05, 0.95], dim=("chain", "draw"))
+        .to_series()
+        .pipe(expit)
+        .unstack("quantile")
+        .add_prefix(name + "_")
+        for idata, name in zip([idata_gpareto, idata_normal], ["gpareto", "normal"])
     )
-    az.plot_forest(
-        [idata_gpareto, idata_normal],
-        model_names=["gpareto", "normal"],
-        var_names="alpha",
-        coords={"alpha_dim_0": sorted_alphas_normal},
-        kind="forestplot",
-        combined=True,
-        figsize=[7, 30],
-        transform=expit,
+    data = data.join(alpha_qs_gpareto).join(alpha_qs_normal)
+    f, ax = plt.subplots(figsize=[12, 5])
+    ax.scatter(data["K"], data["y"] / data["K"], label="Obs", color="black")
+    for model, color in [("gpareto", "tab:blue"), ("normal", "tab:orange")]:
+        ax.vlines(
+            data["K"],
+            data[f"{model}_0.05"],
+            data[f"{model}_0.95"],
+            label=model.capitalize() + " model 5%-95% posterior interval",
+            color=color,
+            zorder=0,
+        )
+    ax.set(
+        title="Observed vs modelled batting averages",
+        ylabel="Hit probability",
+        xlabel="Number of at-bats",
     )
-    f = plt.gcf()
-    ax = plt.gca()
-    ax.set_yticks([])
-    ax.set(ylabel="batter", xlabel="hit probability", title="Results comparison")
+    ax.legend(frameon=False)
     return f, ax
 
 
 if __name__ == "__main__":
-    f, ax = draw_alpha_forestplot()
-    f.savefig(ALPHA_FORESTPLOT_FILE, bbox_inches="tight")
+    f, ax = draw_alpha_plot()
+    f.savefig(ALPHA_PLOT_FILE, bbox_inches="tight")
