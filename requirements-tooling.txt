@@ -1,0 +1,13 @@
+ipython
+jupyter
+black
+pandas-stubs
+types-toml
+flake8
+flake8-bugbear
+flake8-docstrings
+mypy
+python-lsp-server[all]
+python-lsp-black
+pylsp-mypy
+pyls-isort

@@ -1,0 +1,387 @@
+#+TITLE: Extreme value distributions for sports models
+#+STARTUP: overview
+#+PROPERTY: header-args:jupyter-python :session jupyter :results raw drawer :async yes
+
+* elisp                                                            :noexport:
+#+BEGIN_SRC elisp
+(defun tg/org-babel-edit:python ()
+  "Edit python src block with lsp support by tangling the block and
+   then setting the org-edit-special buffer-file-name to the
+   absolute path. Finally load eglot."
+  (interactive)
+
+  ;; org-babel-get-src-block-info returns lang, code_src, and header
+  ;; params; Use nth 2 to get the params and then retrieve the :tangle
+  ;; to get the filename
+  (setq tg/tangled-file-name (expand-file-name (assoc-default :tangle (nth 2 (org-babel-get-src-block-info)))))
+
+  ;; tangle the src block at point 
+  (org-babel-tangle '(4))
+  (org-edit-special)
+
+  ;; Now we should be in the special edit buffer with python-mode. Set
+  ;; the buffer-file-name to the tangled file so that pylsp and
+  ;; plugins can see an actual file.
+  (setq-local buffer-file-name tg/tangled-file-name)
+  (eglot-ensure))
+
+(with-eval-after-load "org"
+  (define-key org-mode-map (kbd "C-c '") #'tg/org-babel-edit:python))
+
+(pyvenv-activate ".venv")
+(load "ob-jupyter")
+#+END_SRC
+
+#+RESULTS:
+: t
+
+* Introduction
+I used to do a lot of statistical analyses of sports data where there was a
+latent parameter for the player's ability. You can see an example [[https://github.com/teddygroves/cricket][here]].
+
+It was a natural choice to use a Bayesian hierarchical model where the abilities
+have a location/scale type distribution with support on the whole real line, and
+in fact this worked pretty well! You would see the kind of players at the top
+and bottom of the ability scale that you would expect.
+
+Still, there were a few problems. The one that I thought about the most was that
+the data are always quite unbalanced because the players know roughly how good
+they are, and choose what they do accordingly, with there generally being more
+data per good player than per bad player. I never came up with a good way to
+solve this problem.
+
+The choice of a symmetrical distribution also seemed a little arbitrary: who
+says there are just as many players with bad ability as good players, and that
+average ability is the most common? Again I never came up with a solution: any
+skewed distribution I could think of seemed pretty arbitrary as well!
+
+Recently I read [[https://mc-stan.org/users/documentation/case-studies/gpareto_functions.html#conclusion-on-the-data-analysis][this great case study]] about geomagnetic storms and it gave me
+the idea that I had been thinking about the sports problem in the wrong way.
+
+Just as data about storms is telling us about one tail of the general solar
+magnetism distribution, maybe data about professional sportspeople is telling us
+about one tail of the general sports ability distribution. If so, maybe
+something like the [[https://en.wikipedia.org/wiki/Generalized_Pareto_distribution][generalised pareto distribution]] might be better for
+describing the distribution of abilities among the pros.
+
+I thought I'd test this out with some sports data, and luckily there is a really
+nice example already available some
+
+* Set up environment
+
+First we install record some python dependencies in the file ~requirements.txt~.
+
+#+begin_src txt :tangle requirements.txt :eval never
+arviz
+pandas
+cmdstanpy
+matplotlib
+#+end_src
+
+These are some optional python libraries that I like to install:
+
+#+begin_src txt :tangle requirements-tooling.txt :eval never
+ipython
+jupyter
+black
+pandas-stubs
+types-toml
+flake8
+flake8-bugbear
+flake8-docstrings
+mypy
+python-lsp-server[all]
+python-lsp-black
+pylsp-mypy
+pyls-isort
+#+end_src
+
+A ~.gitignore~ file.
+
+#+begin_src txt :tangle .gitignore :eval never
+# ignore binary files
+*
+!*.*
+!*/
+
+# ignore hpp files
+*.hpp
+
+# ignore arviz files
+idata*
+
+# ignore dotfiles
+.*
+#+end_src
+
+Now we create a new virtual environment and install the dependencies there
+
+* Code for running the analysis
+
+This makefile lets us run the analysis with the command ~make analysis~. 
+
+#+begin_src makefile :eval never :tangle Makefile
+.PHONY: clean-arviz clean-plots clean-stan clean-all analysis
+.ONESHELL :
+
+ACTIVATE_VENV = .venv/bin/activate
+REQUIREMENTS_FILE = requirements.txt
+DATA_FILE = baseball-hits-2006.csv
+ENV = env.txt
+
+ifeq ($(OS),Windows_NT)
+	INSTALL_CMDSTAN_FLAGS = --compiler
+	ACTIVATE_VENV = .venv/Scripts/activate
+else
+	INSTALL_CMDSTAN_FLAGS =
+endif
+
+$(ACTIVATE_VENV):
+	python -m venv .venv --prompt=baseball
+
+$(ENV): $(ACTIVATE_VENV) $(REQUIREMENTS_FILE)
+	. $(ACTIVATE_VENV) && (\
+	  python -m pip install --upgrade pip; \
+	  python -m pip install -r $(REQUIREMENTS_FILE); \
+	  install_cmdstan $(INSTALL_CMDSTAN_FLAGS); \
+	  echo "environment updated" > $(ENV); \
+	)
+
+$(DATA_FILE): $(ENV)
+	. $(ACTIVATE_VENV) && (\
+	  python fetch_data.py; \
+	)
+
+analysis: $(ENV) $(DATA_FILE)
+	. $(ACTIVATE_VENV) && (\
+	  python sample.py; \
+	  python analyse.py; \
+	)
+
+clean-stan:
+	$(RM) $(shell find . -perm +100 -type f) # remove binary files
+	$(RM) *.hpp
+
+clean-arviz:
+	$(RM) idata*.json
+
+clean-plots:
+	$(RM) *.png
+
+clean-all: clean-stan clean-arviz clean-plots
+#+end_src
+
+* Fetch data
+A script for fetching data called ~fetch_data.py~:
+
+#+begin_src jupyter-python :tangle fetch_data.py :eval never
+import pandas as pd
+
+URL = "https://raw.githubusercontent.com/stan-dev/example-models/master/knitr/pool-binary-trials/baseball-hits-2006.csv"
+FILE_OUT = "baseball-hits-2006.csv"
+
+if __name__ == "__main__":
+    print(f"Fetching data from {URL}")
+    data = pd.read_csv(URL, comment="#")
+    print(f"Writing data to {FILE_OUT}")
+    data.to_csv(FILE_OUT)
+    
+#+end_src
+
+* Define Stan generalised Pareto distribution functions
+
+Since Stan doesn't implement the generalised pareto distribution yet we need to
+do so with a user-defined function. Luckily we can just copy the relevant code
+from the [[https://mc-stan.org/users/documentation/case-studies/gpareto_functions.html#conclusion-on-the-data-analysis][geomagnetic storms analysis]] and save it in the file ~gpareto.stan~.
+
+For this analysis we only need the function ~gpareto_lpdf~:
+
+#+begin_src stan :tangle gpareto.stan
+real gpareto_lpdf(vector y, real ymin, real k, real sigma) {
+  // generalised Pareto log pdf 
+  int N = rows(y);
+  real inv_k = inv(k);
+  if (k<0 && max(y-ymin)/sigma > -inv_k)
+    reject("k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =", k, ", ", sigma);
+  if (sigma<=0)
+    reject("sigma<=0; found sigma =", sigma);
+  if (fabs(k) > 1e-15)
+    return -(1+inv_k)*sum(log1p((y-ymin) * (k/sigma))) -N*log(sigma);
+  else
+    return -sum(y-ymin)/sigma -N*log(sigma); // limit k->0
+}
+#+end_src
+
+* Define model with normal distribution for abilities
+
+The best performing model in the [[https://mc-stan.org/users/documentation/case-studies/pool-binary-trials.html][baseball case study]] looked like this (I removed
+some code to keep things simple).
+
+#+begin_src stan :tangle model-normal.stan
+data {
+  int<lower=0> N; // items
+  array[N] int<lower=0> K; // initial trials
+  array[N] int<lower=0> y; // initial successes  
+}
+parameters {
+  real mu; // population mean of success log-odds
+  real<lower=0> sigma; // population sd of success log-odds
+  vector[N] alpha_std; // success log-odds (standardized)
+}
+model {
+  mu ~ normal(-1, 1); // hyperprior
+  sigma ~ normal(0, 1); // hyperprior
+  alpha_std ~ normal(0, 1); // prior (hierarchical)
+  y ~ binomial_logit(K, mu + sigma * alpha_std); // likelihood
+}
+generated quantities {
+  vector[N] alpha = mu + sigma * alpha_std;
+}
+#+end_src
+
+* Define model with generalised pareto distribution for abilities
+
+#+begin_src stan :tangle model-gpareto.stan
+functions {
+#include gpareto.stan
+}
+data {
+  int<lower=0> N; // items
+  array[N] int<lower=0> K; // initial trials
+  array[N] int<lower=0> y; // initial successes
+  real min_alpha; // noone worse than this would be in the dataset
+  real max_alpha;
+}
+parameters {
+  real mu; // population mean of success log-odds
+  real<lower=0> sigma; // population sd of success log-odds
+  real<lower=-sigma/(max_alpha-min_alpha)> k; // shape parameter of generalised pareto distribution
+  vector<lower=min_alpha,upper=max_alpha>[N] alpha; // success log-odds
+}
+model {
+  mu ~ normal(-1, 1); // hyperprior
+  sigma ~ normal(0, 1); // hyperprior
+  alpha ~ gpareto(min_alpha, k, sigma); // prior (hierarchical)
+  y ~ binomial_logit(K, alpha); // likelihood
+  // note no explicit prior for k
+}
+#+end_src
+
+* Do sampling
+
+This code can go in a python script called ~sample.py~, and will 
+
+#+begin_src jupyter-python :tangle sample.py
+import arviz as az
+import cmdstanpy
+import pandas as pd
+from scipy.special import logit
+
+STAN_FILE_NORMAL = "model-normal.stan"
+STAN_FILE_GPARETO = "model-gpareto.stan"
+DATA_FILE = "baseball-hits-2006.csv"
+SAMPLE_KWARGS = {
+    "chains": 4,
+    "iter_warmup": 1000,
+    "iter_sampling": 1000,
+}
+SAMPLE_KWARGS_GPARETO = {
+    "max_treedepth": 12,
+    "adapt_delta": 0.99,
+}
+MIN_ALPHA = logit(0.005) # you probably need a true average >0.5% to get in the dataset
+MAX_ALPHA = logit(0.99)  # noone has a true average of 99%
+
+
+def main():
+    model_normal = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_NORMAL)
+    model_gpareto = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_GPARETO)
+    data_df = pd.read_csv(DATA_FILE)
+    data_dict = {
+        "N": data_df.shape[0],
+        "y": data_df["y"].tolist(),
+        "K": data_df["K"].tolist(),
+        "min_alpha": MIN_ALPHA,
+        "max_alpha": MAX_ALPHA,
+    }
+    for model, name in zip([model_normal, model_gpareto], ["normal", "gpareto"]):
+        sample_kwargs = (
+            SAMPLE_KWARGS
+            if name != "gpareto"
+            else {**SAMPLE_KWARGS, **SAMPLE_KWARGS_GPARETO}
+        )
+        print(f"Fitting model {name}")
+        mcmc = model.sample(data=data_dict, **sample_kwargs)
+        idata = az.from_cmdstanpy(mcmc)
+        idata_file = f"idata-{name}.json"
+        print(f"Saving idata to {idata_file}")
+        idata.to_json(idata_file)
+
+
+if __name__ == "__main__":
+    main()
+#+end_src
+
+* Analyse
+
+From the results of running this script we can see that both models survive
+cmdstanpy's built in diagnostic checks: now it's time to analyse the results.
+
+The next script, ~analyse.py~, loads the results of the sampling using arviz and
+creates a plot of each model's alpha parameters, transformed onto the more
+meaningful probability scale where they represent what each model thinks about
+each player's true batting average.
+
+#+begin_src jupyter-python :tangle analyse.py
+import arviz as az
+from matplotlib import pyplot as plt
+from scipy.special import expit
+
+ALPHA_FORESTPLOT_FILE = "alpha-forestplot.png"
+
+def draw_alpha_forestplot():
+    idata_gpareto = az.from_json("idata-gpareto.json")
+    idata_normal = az.from_json("idata-normal.json")
+    alpha_means_gpareto = idata_gpareto.posterior["alpha"].mean(("chain", "draw"))
+    alpha_means_normal = idata_normal.posterior["alpha"].mean(("chain", "draw"))
+    sorted_alphas_gpareto, sorted_alphas_normal = (
+        idata.posterior["alpha"].sortby(alpha_means).coords["alpha_dim_0"]
+        for idata, alpha_means in [
+            (idata_gpareto, alpha_means_gpareto),
+            (idata_normal, alpha_means_normal),
+        ]
+    )
+    az.plot_forest(
+        [idata_gpareto, idata_normal],
+        model_names=["gpareto", "normal"],
+        var_names="alpha",
+        coords={"alpha_dim_0": sorted_alphas_normal},
+        kind="forestplot",
+        combined=True,
+        figsize=[7, 30],
+        transform=expit,
+    )
+    f = plt.gcf()
+    ax = plt.gca()
+    ax.set_yticks([])
+    ax.set(ylabel="batter", xlabel="hit probability", title="Results comparison")
+    return f, ax
+
+
+if __name__ == "__main__":
+    f, ax = draw_alpha_forestplot()
+    f.savefig(ALPHA_FORESTPLOT_FILE)
+#+end_src
+
+[[./alpha-forestplot.png]]
+
+From this plot we can see that the normal model is somewhat over-regularised: it
+thinks all the batters have a true average of about 0.3, which is wrong.
+
+The generalised pareto model, on the other hand, has very big differences in how
+certain it is about particular players. It perhaps has a bit of the opposite
+problem, under-regularising to the point where it thinks that some players might
+have unrealistically high true averages in the 0.8+ range. However in my opinion
+it is closer to how you might intuitively respond to the data. If desired, more
+regularisation could be achieved by just adding a line like ~alpha ~
+normal(inv_logit(0.2), some-appropriate-sd);~.
