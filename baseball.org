@@ -222,8 +222,8 @@ some code to keep things simple).
 #+begin_src stan :tangle model-normal.stan
 data {
   int<lower=0> N; // items
-  array[N] int<lower=0> K; // initial trials
-  array[N] int<lower=0> y; // initial successes  
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes  
 }
 parameters {
   real mu; // population mean of success log-odds
@@ -249,19 +249,17 @@ functions {
 }
 data {
   int<lower=0> N; // items
-  array[N] int<lower=0> K; // initial trials
-  array[N] int<lower=0> y; // initial successes
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes
   real min_alpha; // noone worse than this would be in the dataset
   real max_alpha;
 }
 parameters {
-  real mu; // population mean of success log-odds
-  real<lower=0> sigma; // population sd of success log-odds
+  real<lower=0> sigma; // scale parameter of generalised pareto distribution
   real<lower=-sigma/(max_alpha-min_alpha)> k; // shape parameter of generalised pareto distribution
   vector<lower=min_alpha,upper=max_alpha>[N] alpha; // success log-odds
 }
 model {
-  mu ~ normal(-1, 1); // hyperprior
   sigma ~ normal(0, 1); // hyperprior
   alpha ~ gpareto(min_alpha, k, sigma); // prior (hierarchical)
   y ~ binomial_logit(K, alpha); // likelihood
@@ -271,7 +269,16 @@ model {
 
 * Do sampling
 
-This code can go in a python script called ~sample.py~, and will 
+This code can go in a python script called ~sample.py~, and will run sampling
+for both models against the 2006 data, put the results in arviz objects and
+save them as ~json~ files.
+
+Note that this script hard-codes some minimum and maximum true batting averages
+that are required by the generalised pareto model. I think 0.5% and 99% are
+pretty reasonable choices: from my limited understanding of baseball 99% is
+basically impossible, and even the worst pro could probably get on base more
+often than one time out of 200. A normal person, on the other hand, would just
+about never reach even this low threshold.
 
 #+begin_src jupyter-python :tangle sample.py :eval never
 import arviz as az

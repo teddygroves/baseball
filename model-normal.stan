@@ -1,7 +1,7 @@
 data {
   int<lower=0> N; // items
-  array[N] int<lower=0> K; // initial trials
-  array[N] int<lower=0> y; // initial successes  
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes  
 }
 parameters {
   real mu; // population mean of success log-odds
