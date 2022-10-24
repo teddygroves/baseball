@@ -272,7 +272,7 @@ model {
 
 This code can go in a python script called ~sample.py~, and will 
 
-#+begin_src jupyter-python :tangle sample.py
+#+begin_src jupyter-python :tangle sample.py :eval never-exports
 import arviz as az
 import cmdstanpy
 import pandas as pd
@@ -333,7 +333,7 @@ creates a plot of each model's alpha parameters, transformed onto the more
 meaningful probability scale where they represent what each model thinks about
 each player's true batting average.
 
-#+begin_src jupyter-python :tangle analyse.py
+#+begin_src jupyter-python :tangle analyse.py :eval never-exports
 import arviz as az
 from matplotlib import pyplot as plt
 from scipy.special import expit
@@ -371,7 +371,7 @@ def draw_alpha_forestplot():
 
 if __name__ == "__main__":
     f, ax = draw_alpha_forestplot()
-    f.savefig(ALPHA_FORESTPLOT_FILE)
+    f.savefig(ALPHA_FORESTPLOT_FILE, bbox_inches="tight")
 #+end_src
 
 [[./alpha-forestplot.png]]

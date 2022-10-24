@@ -35,4 +35,4 @@ def draw_alpha_forestplot():
 
 if __name__ == "__main__":
     f, ax = draw_alpha_forestplot()
-    f.savefig(ALPHA_FORESTPLOT_FILE)
+    f.savefig(ALPHA_FORESTPLOT_FILE, bbox_inches="tight")

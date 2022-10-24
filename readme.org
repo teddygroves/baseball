@@ -1,4 +1,4 @@
-# Created 2022-10-24 Mon 12:10
+# Created 2022-10-24 Mon 12:17
 #+title: Extreme value distributions for sports models
 #+author: Teddy Groves
 #+startup: overview
@@ -339,7 +339,7 @@ def draw_alpha_forestplot():
 
 if __name__ == "__main__":
     f, ax = draw_alpha_forestplot()
-    f.savefig(ALPHA_FORESTPLOT_FILE)
+    f.savefig(ALPHA_FORESTPLOT_FILE, bbox_inches="tight")
 #+end_src
 
 [[file:./alpha-forestplot.png]]
