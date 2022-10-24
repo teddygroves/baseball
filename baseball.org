@@ -46,27 +46,28 @@ in fact this worked pretty well! You would see the kind of players at the top
 and bottom of the ability scale that you would expect.
 
 Still, there were a few problems. The one that I thought about the most was that
-the data are always quite unbalanced because the players know roughly how good
-they are, and choose what they do accordingly, with there generally being more
-data per good player than per bad player. I never came up with a good way to
-solve this problem.
+the data are systematically unbalanced because better players tend to produce
+more data than worse players. The result of this was that my models would often
+inappropriately think the bad players were like the good players: they would not
+only tend to be too certain about the abilities of low-data players, but also be
+biased, thinking that these players are probably a bit better than they actually
+are. I never came up with a good way to solve this problem, despite trying a lot
+of things!
 
-The choice of a symmetrical distribution also seemed a little arbitrary: who
-says there are just as many players with bad ability as good players, and that
-average ability is the most common? Again I never came up with a solution: any
-skewed distribution I could think of seemed pretty arbitrary as well!
+Even though I don't work with sports data very much any more, the problem still
+haunted me, so when I read [[https://mc-stan.org/users/documentation/case-studies/gpareto_functions.html#conclusion-on-the-data-analysis][this great case study]] about geomagnetic storms it
+gave me an idea for yet another potential solution.
 
-Recently I read [[https://mc-stan.org/users/documentation/case-studies/gpareto_functions.html#conclusion-on-the-data-analysis][this great case study]] about geomagnetic storms and it gave me
-the idea that I had been thinking about the sports problem in the wrong way.
-
-Just as data about storms is telling us about one tail of the general solar
-magnetism distribution, maybe data about professional sportspeople is telling us
-about one tail of the general sports ability distribution. If so, maybe
-something like the [[https://en.wikipedia.org/wiki/Generalized_Pareto_distribution][generalised pareto distribution]] might be better for
-describing the distribution of abilities among the pros.
+The idea was this: just as data about intense storms that cause electricity
+problems tell us about a tail of the bigger solar magnetism distribution, maybe
+data about professional sportspeople is best thought about as coming from a tail
+of the general sports ability distribution. If so, maybe something like the
+[[https://en.wikipedia.org/wiki/Generalized_Pareto_distribution][generalised pareto distribution]] might be better than the bog standard normal
+distribution for describing the pros' abilities.
 
 I thought I'd test this out with some sports data, and luckily there is a really
-nice example already available some
+nice baseball example on [[https://mc-stan.org/users/documentation/case-studies/pool-binary-trials.html][the Stan case studies website]], complete with [[https://github.com/stan-dev/example-models/blob/master/knitr/pool-binary-trials/baseball-hits-2006.csv][data from
+the 2006 Major league season]].
 
 * Set up environment
 
