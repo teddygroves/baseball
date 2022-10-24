@@ -288,7 +288,7 @@ basically impossible, and even the worst pro could probably get on base more
 often than one time out of 200. A normal person, on the other hand, would just
 about never reach even this low threshold.
 
-#+begin_src jupyter-python :tangle sample.py :eval never-export
+#+begin_src jupyter-python :tangle sample.py :eval never-export :exports both
 import arviz as az
 import cmdstanpy
 import pandas as pd

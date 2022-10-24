@@ -1,4 +1,4 @@
-# Created 2022-10-24 Mon 15:31
+# Created 2022-10-24 Mon 15:33
 #+title: Extreme value distributions for sports models
 #+author: Teddy Groves
 #+startup: overview
@@ -313,6 +313,65 @@ def main():
 if __name__ == "__main__":
     main()
 #+end_src
+
+#+results: 
+:results:
+#+begin_example
+15:29:12 - cmdstanpy - INFO - CmdStan start processing
+15:29:12 - cmdstanpy - INFO - Chain [1] start processing
+15:29:12 - cmdstanpy - INFO - Chain [2] start processing
+15:29:12 - cmdstanpy - INFO - Chain [3] start processing
+15:29:12 - cmdstanpy - INFO - Chain [4] start processing
+Fitting model normal
+15:29:13 - cmdstanpy - INFO - Chain [1] done processing
+15:29:13 - cmdstanpy - INFO - Chain [3] done processing
+15:29:13 - cmdstanpy - INFO - Chain [4] done processing
+15:29:13 - cmdstanpy - INFO - Chain [2] done processing
+/Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45542.157  16.733 -45573.700 -45511.000      0.562    0.398   
+diverging      0.000   0.000      0.000      0.000      0.000    0.000   
+mu            -0.993   0.012     -1.015     -0.972      0.000    0.000   
+sigma          0.111   0.013      0.087      0.137      0.000    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp            884.0    1427.0    1.0  
+diverging    4000.0    4000.0    NaN  
+mu           3229.0    2838.0    1.0  
+sigma        1485.0    2142.0    1.0  
+Saving idata to idata-normal.json
+15:29:14 - cmdstanpy - INFO - CmdStan start processing
+15:29:14 - cmdstanpy - INFO - Chain [1] start processing
+15:29:14 - cmdstanpy - INFO - Chain [2] start processing
+15:29:14 - cmdstanpy - INFO - Chain [3] start processing
+15:29:14 - cmdstanpy - INFO - Chain [4] start processing
+Fitting model gpareto
+15:29:17 - cmdstanpy - INFO - Chain [2] done processing
+15:29:18 - cmdstanpy - INFO - Chain [3] done processing
+15:29:18 - cmdstanpy - INFO - Chain [1] done processing
+15:29:18 - cmdstanpy - INFO - Chain [4] done processing
+15:29:18 - cmdstanpy - WARNING - Non-fatal error during sampling:
+Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-1.82861e+11, 1.8082e+12 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-4.70974e+46, 4.65719e+47 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+	Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-1.28456e+47, 1.27023e+48 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+Consider re-running with show_console=True if the above output is unclear!
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45785.258  12.884 -45810.400 -45762.900      0.358    0.253   
+diverging      0.000   0.000      0.000      0.000      0.000    0.000   
+sigma          4.956   0.251      4.502      5.428      0.003    0.002   
+k             -0.497   0.026     -0.544     -0.449      0.000    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp           1295.0    2166.0    1.0  
+diverging    4000.0    4000.0    NaN  
+sigma        6965.0    3055.0    1.0  
+k            7254.0    3011.0    1.0  
+Saving idata to idata-gpareto.json
+/Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+#+end_example
+:END:
 
 * Analyse
 
