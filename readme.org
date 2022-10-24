@@ -1,4 +1,4 @@
-# Created 2022-10-24 Mon 13:15
+# Created 2022-10-24 Mon 14:53
 #+title: Extreme value distributions for sports models
 #+author: Teddy Groves
 #+startup: overview
@@ -190,8 +190,8 @@ some code to keep things simple).
 #+begin_src stan
 data {
   int<lower=0> N; // items
-  array[N] int<lower=0> K; // initial trials
-  array[N] int<lower=0> y; // initial successes  
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes  
 }
 parameters {
   real mu; // population mean of success log-odds
@@ -217,19 +217,17 @@ functions {
 }
 data {
   int<lower=0> N; // items
-  array[N] int<lower=0> K; // initial trials
-  array[N] int<lower=0> y; // initial successes
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes
   real min_alpha; // noone worse than this would be in the dataset
   real max_alpha;
 }
 parameters {
-  real mu; // population mean of success log-odds
-  real<lower=0> sigma; // population sd of success log-odds
+  real<lower=0> sigma; // scale parameter of generalised pareto distribution
   real<lower=-sigma/(max_alpha-min_alpha)> k; // shape parameter of generalised pareto distribution
   vector<lower=min_alpha,upper=max_alpha>[N] alpha; // success log-odds
 }
 model {
-  mu ~ normal(-1, 1); // hyperprior
   sigma ~ normal(0, 1); // hyperprior
   alpha ~ gpareto(min_alpha, k, sigma); // prior (hierarchical)
   y ~ binomial_logit(K, alpha); // likelihood
@@ -239,7 +237,16 @@ model {
 
 * Do sampling
 
-This code can go in a python script called ~sample.py~, and will 
+This code can go in a python script called ~sample.py~, and will run sampling
+for both models against the 2006 data, put the results in arviz objects and
+save them as ~json~ files.
+
+Note that this script hard-codes some minimum and maximum true batting averages
+that are required by the generalised pareto model. I think 0.5% and 99% are
+pretty reasonable choices: from my limited understanding of baseball 99% is
+basically impossible, and even the worst pro could probably get on base more
+often than one time out of 200. A normal person, on the other hand, would just
+about never reach even this low threshold.
 
 #+begin_src jupyter-python
 import arviz as az
@@ -291,6 +298,59 @@ def main():
 if __name__ == "__main__":
     main()
 #+end_src
+
+* Diagnostics
+
+The following code summarises the non-player-specific parameters from both model runs.
+
+#+begin_src jupyter-python
+import arviz as az
+
+diag_gpareto, diag_normal = (
+    az.summary(az.from_json(f"idata-{name}.json").sample_stats, var_names=["lp", "diverging"]) for name in ["gpareto", "normal"]
+)
+summary_gpareto, summary_normal = (
+    az.summary(az.from_json(f"idata-{name}.json"), var_names="~alpha", filter_vars="like")
+    for name in ["gpareto", "normal"]
+)
+display(pd.concat([diag_gpareto, summary_gpareto]))
+display(pd.concat([diag_normal, summary_normal]))
+#+end_src
+
+#+results: 
+:results:
+: /Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+:   (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+: /Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+:   (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+
+#+begin_example
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45785.478  13.237 -45811.700 -45762.800      0.362    0.256   
+diverging      0.000   0.000      0.000      0.000      0.000    0.000   
+sigma          4.956   0.259      4.462      5.433      0.003    0.002   
+k             -0.497   0.027     -0.546     -0.446      0.000    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp           1345.0    2054.0    1.0  
+diverging    4000.0    4000.0    NaN  
+sigma       10207.0    3062.0    1.0  
+k            9790.0    3031.0    1.0  
+#+end_example
+#+begin_example
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45543.075  17.180 -45575.300 -45512.300      0.564    0.399   
+diverging      0.000   0.000      0.000      0.000      0.000    0.000   
+mu            -0.992   0.012     -1.016     -0.971      0.000    0.000   
+sigma          0.110   0.013      0.087      0.137      0.000    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp            921.0    1911.0    1.0  
+diverging    4000.0    4000.0    NaN  
+mu           2795.0    2837.0    1.0  
+sigma        1548.0    2450.0    1.0  
+#+end_example
+:END:
 
 * Analyse
 
@@ -354,12 +414,16 @@ if __name__ == "__main__":
 [[file:./alpha-plot.png]]
 
 From this plot we can see that the normal model is somewhat over-regularised: it
-thinks all the batters have a true average of about 0.3, which is unlikely.
+thinks all the batters have a true average of about 0.3, which is unlikely. It
+also thinks the players with few at-bats tend to be a bit better than their
+results would suggest: there are more black dots below the orange band than
+above in the 0 to 100 region.
 
 The generalised pareto model, on the other hand, has very big differences in how
 certain it is about particular players. The key thing is that it is far more
 uncertain about the players with fewer at-bats: this is the thing I had never
-been able to achieve before and made me pretty happy with this experiment.
+been able to achieve before with a hierarchical model and made me pretty happy
+with this experiment.
 
 The generalised Pareto model perhaps has a bit of the opposite problem to the
 normal model, under-regularising to the point where it thinks that some players
@@ -368,3 +432,21 @@ opinion it is still closer than the normal model to how you might intuitively
 respond to the data. If desired, more regularisation could be achieved by just
 adding a line like ~alpha ~ normal(inv_logit(0.2), some-appropriate-sd);~ to the
 Stan program.
+
+* Conclusion
+
+As I mentioned, I was pretty happy with how the results of the new model look in
+the graph above. It's also nice that the sigma and k parameters of the
+generalised pareto distribution were fixed fairly narrowly. However it would be
+nice to understand a bit better why the two models behave so differently. Here
+are a few things that would be nice to look into:
+
+- Compare against a simple non-hierarchical model (for example keep the normal
+  model but hardcode the parameter ~sigma~ to some large value): do the results
+  come out about the same as the generalised pareto model?
+- Do some out of sample testing.
+- Is the reason for the difference the fact that the generalised pareto
+  distribution is non-symmetrical? If so, could we achieve the same results
+  using a different non-symmetrical distribution?
+- Answer some extreme-value type questions like "what is the probability of a
+  batter having a true average greater than 0.6?"
