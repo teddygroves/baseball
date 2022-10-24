@@ -1,9 +1,40 @@
-# Created 2022-10-24 Mon 12:10
-#+title: Extreme value distributions for sports models
-#+author: Teddy Groves
-#+startup: overview
-#+property: header-args:jupyter-python :session jupyter :results raw drawer :async yes
-#+export_file_name: readme.org
+#+TITLE: Extreme value distributions for sports models
+#+STARTUP: overview
+#+PROPERTY: header-args:jupyter-python :session jupyter :results raw drawer :async yes
+#+EXPORT_FILE_NAME: readme.org
+
+* elisp                                                            :noexport:
+#+BEGIN_SRC elisp :eval never
+(defun tg/org-babel-edit:python ()
+  "Edit python src block with lsp support by tangling the block and
+   then setting the org-edit-special buffer-file-name to the
+   absolute path. Finally load eglot."
+  (interactive)
+
+  ;; org-babel-get-src-block-info returns lang, code_src, and header
+  ;; params; Use nth 2 to get the params and then retrieve the :tangle
+  ;; to get the filename
+  (setq tg/tangled-file-name (expand-file-name (assoc-default :tangle (nth 2 (org-babel-get-src-block-info)))))
+
+  ;; tangle the src block at point 
+  (org-babel-tangle '(4))
+  (org-edit-special)
+
+  ;; Now we should be in the special edit buffer with python-mode. Set
+  ;; the buffer-file-name to the tangled file so that pylsp and
+  ;; plugins can see an actual file.
+  (setq-local buffer-file-name tg/tangled-file-name)
+  (eglot-ensure))
+
+(with-eval-after-load "org"
+  (define-key org-mode-map (kbd "C-c '") #'tg/org-babel-edit:python))
+
+(pyvenv-activate ".venv")
+(load "ob-jupyter")
+#+END_SRC
+
+#+RESULTS:
+: t
 
 * Introduction
 I used to do a lot of statistical analyses of sports data where there was a
@@ -41,7 +72,7 @@ nice example already available some
 
 First we install record some python dependencies in the file ~requirements.txt~.
 
-#+begin_src txt
+#+begin_src txt :tangle requirements.txt :eval never
 arviz
 pandas
 cmdstanpy
@@ -50,7 +81,7 @@ matplotlib
 
 These are some optional python libraries that I like to install:
 
-#+begin_src txt
+#+begin_src txt :tangle requirements-tooling.txt :eval never
 ipython
 jupyter
 black
@@ -68,14 +99,14 @@ pyls-isort
 
 A ~.gitignore~ file.
 
-#+begin_src txt
+#+begin_src txt :tangle .gitignore :eval never
 # ignore binary files
-,*
+*
 !*.*
 !*/
 
 # ignore hpp files
-,*.hpp
+*.hpp
 
 # ignore arviz files
 idata*
@@ -90,7 +121,7 @@ Now we create a new virtual environment and install the dependencies there
 
 This makefile lets us run the analysis with the command ~make analysis~. 
 
-#+begin_src makefile
+#+begin_src makefile :eval never :tangle Makefile
 .PHONY: clean-arviz clean-plots clean-stan clean-all analysis
 .ONESHELL :
 
@@ -100,43 +131,43 @@ DATA_FILE = baseball-hits-2006.csv
 ENV = env.txt
 
 ifeq ($(OS),Windows_NT)
-        INSTALL_CMDSTAN_FLAGS = --compiler
-        ACTIVATE_VENV = .venv/Scripts/activate
+	INSTALL_CMDSTAN_FLAGS = --compiler
+	ACTIVATE_VENV = .venv/Scripts/activate
 else
-        INSTALL_CMDSTAN_FLAGS =
+	INSTALL_CMDSTAN_FLAGS =
 endif
 
 $(ACTIVATE_VENV):
-        python -m venv .venv --prompt=baseball
+	python -m venv .venv --prompt=baseball
 
 $(ENV): $(ACTIVATE_VENV) $(REQUIREMENTS_FILE)
-        . $(ACTIVATE_VENV) && (\
-          python -m pip install --upgrade pip; \
-          python -m pip install -r $(REQUIREMENTS_FILE); \
-          install_cmdstan $(INSTALL_CMDSTAN_FLAGS); \
-          echo "environment updated" > $(ENV); \
-        )
+	. $(ACTIVATE_VENV) && (\
+	  python -m pip install --upgrade pip; \
+	  python -m pip install -r $(REQUIREMENTS_FILE); \
+	  install_cmdstan $(INSTALL_CMDSTAN_FLAGS); \
+	  echo "environment updated" > $(ENV); \
+	)
 
 $(DATA_FILE): $(ENV)
-        . $(ACTIVATE_VENV) && (\
-          python fetch_data.py; \
-        )
+	. $(ACTIVATE_VENV) && (\
+	  python fetch_data.py; \
+	)
 
 analysis: $(ENV) $(DATA_FILE)
-        . $(ACTIVATE_VENV) && (\
-          python sample.py; \
-          python analyse.py; \
-        )
+	. $(ACTIVATE_VENV) && (\
+	  python sample.py; \
+	  python analyse.py; \
+	)
 
 clean-stan:
-        $(RM) $(shell find . -perm +100 -type f) # remove binary files
-        $(RM) *.hpp
+	$(RM) $(shell find . -perm +100 -type f) # remove binary files
+	$(RM) *.hpp
 
 clean-arviz:
-        $(RM) idata*.json
+	$(RM) idata*.json
 
 clean-plots:
-        $(RM) *.png
+	$(RM) *.png
 
 clean-all: clean-stan clean-arviz clean-plots
 #+end_src
@@ -144,7 +175,7 @@ clean-all: clean-stan clean-arviz clean-plots
 * Fetch data
 A script for fetching data called ~fetch_data.py~:
 
-#+begin_src jupyter-python
+#+begin_src jupyter-python :tangle fetch_data.py :eval never
 import pandas as pd
 
 URL = "https://raw.githubusercontent.com/stan-dev/example-models/master/knitr/pool-binary-trials/baseball-hits-2006.csv"
@@ -155,6 +186,7 @@ if __name__ == "__main__":
     data = pd.read_csv(URL, comment="#")
     print(f"Writing data to {FILE_OUT}")
     data.to_csv(FILE_OUT)
+    
 #+end_src
 
 * Define Stan generalised Pareto distribution functions
@@ -165,7 +197,7 @@ from the [[https://mc-stan.org/users/documentation/case-studies/gpareto_function
 
 For this analysis we only need the function ~gpareto_lpdf~:
 
-#+begin_src stan
+#+begin_src stan :tangle gpareto.stan
 real gpareto_lpdf(vector y, real ymin, real k, real sigma) {
   // generalised Pareto log pdf 
   int N = rows(y);
@@ -186,7 +218,7 @@ real gpareto_lpdf(vector y, real ymin, real k, real sigma) {
 The best performing model in the [[https://mc-stan.org/users/documentation/case-studies/pool-binary-trials.html][baseball case study]] looked like this (I removed
 some code to keep things simple).
 
-#+begin_src stan
+#+begin_src stan :tangle model-normal.stan
 data {
   int<lower=0> N; // items
   array[N] int<lower=0> K; // initial trials
@@ -210,7 +242,7 @@ generated quantities {
 
 * Define model with generalised pareto distribution for abilities
 
-#+begin_src stan
+#+begin_src stan :tangle model-gpareto.stan
 functions {
 #include gpareto.stan
 }
@@ -240,7 +272,7 @@ model {
 
 This code can go in a python script called ~sample.py~, and will 
 
-#+begin_src jupyter-python
+#+begin_src jupyter-python :tangle sample.py
 import arviz as az
 import cmdstanpy
 import pandas as pd
@@ -301,7 +333,7 @@ creates a plot of each model's alpha parameters, transformed onto the more
 meaningful probability scale where they represent what each model thinks about
 each player's true batting average.
 
-#+begin_src jupyter-python
+#+begin_src jupyter-python :tangle analyse.py
 import arviz as az
 from matplotlib import pyplot as plt
 from scipy.special import expit
@@ -342,7 +374,7 @@ if __name__ == "__main__":
     f.savefig(ALPHA_FORESTPLOT_FILE)
 #+end_src
 
-[[file:./alpha-forestplot.png]]
+[[./alpha-forestplot.png]]
 
 From this plot we can see that the normal model is somewhat over-regularised: it
 thinks all the batters have a true average of about 0.3, which is wrong.
