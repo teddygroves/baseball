@@ -229,19 +229,25 @@ data {
   array[N] int<lower=0> K; // trials
   array[N] int<lower=0> y; // successes  
 }
+transformed data {
+  vector[N] log_K = log(to_vector(K));
+  vector[N] log_K_std = (log_K - mean(log_K)) / sd(log_K);
+}
 parameters {
   real mu; // population mean of success log-odds
   real<lower=0> sigma; // population sd of success log-odds
+  real a_K;
   vector[N] alpha_std; // success log-odds (standardized)
 }
 model {
+  a_K ~ normal(0, 0.1);
   mu ~ normal(-1, 1); // hyperprior
   sigma ~ normal(0, 1); // hyperprior
   alpha_std ~ normal(0, 1); // prior (hierarchical)
-  y ~ binomial_logit(K, mu + sigma * alpha_std); // likelihood
+  y ~ binomial_logit(K, mu + a_K * log_K_std + sigma * alpha_std); // likelihood
 }
 generated quantities {
-  vector[N] alpha = mu + sigma * alpha_std;
+  vector[N] alpha = mu + a_K * log_K_std + sigma * alpha_std;
 }
 #+end_src
 
@@ -316,10 +322,11 @@ def get_summary(idata):
     return pd.concat([summary_ss, summary_vars])
 
 
-def main():
-    model_normal = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_NORMAL)
-    model_gpareto = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_GPARETO)
-    data_df = pd.read_csv(DATA_FILE)
+def fit_models(model_file_dict, data_df):
+    model_dict = {
+        name: cmdstanpy.CmdStanModel(stan_file=stan_file)
+        for name, stan_file in model_file_dict.items()
+    }
     data_dict = {
         "N": data_df.shape[0],
         "y": data_df["y"].tolist(),
@@ -327,10 +334,10 @@ def main():
         "min_alpha": MIN_ALPHA,
         "max_alpha": MAX_ALPHA,
     }
-    for model, name in zip([model_normal, model_gpareto], ["normal", "gpareto"]):
+    for name, model in model_dict.items():
         sample_kwargs = (
             SAMPLE_KWARGS
-            if name != "gpareto"
+            if "gpareto" not in name
             else {**SAMPLE_KWARGS, **SAMPLE_KWARGS_GPARETO}
         )
         print(f"Fitting model {name}")
@@ -343,7 +350,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    data_df = pd.read_csv(DATA_FILE)
+    fit_models(
+        {"normal": STAN_FILE_NORMAL, "gpareto": STAN_FILE_GPARETO},
+        data_df
+    )
 #+end_src
 
 #+RESULTS:
@@ -425,10 +436,7 @@ DATA_FILE = "baseball-hits-2006.csv"
 ALPHA_PLOT_FILE = "alpha-plot.png"
 
 
-def draw_alpha_plot():
-    idata_gpareto = az.from_json("idata-gpareto.json")
-    idata_normal = az.from_json("idata-normal.json")
-    data = pd.read_csv(DATA_FILE).copy()
+def draw_alpha_plot(idata_gpareto, idata_normal, data):
     alpha_qs_gpareto, alpha_qs_normal = (
         idata.posterior["alpha"]
         .quantile([0.05, 0.95], dim=("chain", "draw"))
@@ -438,7 +446,7 @@ def draw_alpha_plot():
         .add_prefix(name + "_")
         for idata, name in zip([idata_gpareto, idata_normal], ["gpareto", "normal"])
     )
-    data = data.join(alpha_qs_gpareto).join(alpha_qs_normal)
+    data = data.copy().join(alpha_qs_gpareto).join(alpha_qs_normal)
     f, ax = plt.subplots(figsize=[12, 5])
     ax.scatter(data["K"], data["y"] / data["K"], label="Obs", color="black")
     for model, color in [("gpareto", "tab:blue"), ("normal", "tab:orange")]:
@@ -460,7 +468,10 @@ def draw_alpha_plot():
 
 
 if __name__ == "__main__":
-    f, ax = draw_alpha_plot()
+    data = pd.read_csv(DATA_FILE)
+    idata_gpareto = az.from_json("idata-gpareto.json")
+    idata_normal = az.from_json("idata-normal.json")
+    f, ax = draw_alpha_plot(idata_gpareto, idata_normal, data)
     f.savefig(ALPHA_PLOT_FILE, bbox_inches="tight")
 #+end_src
 
@@ -503,3 +514,183 @@ are a few things that would be nice to look into:
   using a different non-symmetrical distribution?
 - Answer some extreme-value type questions like "what is the probability of a
   batter having a true average greater than 0.6?"
+
+* Postscript: some more models!
+After I posted this analysis on the Stan discourse some people suggested that a)
+the generalised pareto model was under-regularised and b) that the normal model
+should have an effect for number of at-bats. I thought I'd better try out both
+of those ideas.
+
+** Normal model with effect for number of at-bats
+#+begin_src stan :tangle model-normal-at-bats.stan
+data {
+  int<lower=0> N; // items
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes  
+}
+transformed data {
+  vector[N] log_K = log(to_vector(K));
+  vector[N] log_K_std = (log_K - mean(log_K)) / sd(log_K);
+}
+parameters {
+  real mu; // population mean of success log-odds
+  real<lower=0> sigma; // population sd of success log-odds
+  real a_K;
+  vector[N] alpha_std; // success log-odds (standardized)
+}
+model {
+  a_K ~ normal(0, 0.1);
+  mu ~ normal(-1, 1); // hyperprior
+  sigma ~ normal(0, 1); // hyperprior
+  alpha_std ~ normal(0, 1); // prior (hierarchical)
+  y ~ binomial_logit(K, mu + a_K * log_K_std + sigma * alpha_std); // likelihood
+}
+generated quantities {
+  vector[N] alpha = mu + a_K * log_K_std + sigma * alpha_std;
+}
+#+end_src
+
+** Generalised Pareto model with more regularisation
+#+begin_src stan :tangle model-gpareto-reg.stan
+functions {
+#include gpareto.stan
+}
+data {
+  int<lower=0> N; // items
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes
+  real min_alpha; // noone worse than this would be in the dataset
+  real max_alpha;
+}
+parameters {
+  real<lower=0> sigma; // scale parameter of generalised pareto distribution
+  real<lower=-sigma/(max_alpha-min_alpha)> k; // shape parameter of generalised pareto distribution
+  vector<lower=min_alpha,upper=max_alpha>[N] alpha; // success log-odds
+}
+model {
+  sigma ~ normal(0, 1); // hyperprior
+  alpha ~ gpareto(min_alpha, k, sigma); // prior (hierarchical)
+  alpha ~ normal(-1.38, 0.4);  // prob between 0.1 and 0.4 on prob scale
+  y ~ binomial_logit(K, alpha); // likelihood
+  // note no explicit prior for k
+}
+#+end_src
+
+
+** Fit
+#+begin_src jupyter-python :tangle sample_extra.py :eval never-exports :exports both
+import pandas as pd
+from sample import fit_models, DATA_FILE
+
+STAN_FILE_GPARETO_REG = "model-gpareto-reg.stan"
+STAN_FILE_NORMAL_AT_BATS = "model-normal-at-bats.stan"
+
+if __name__ == "__main__":
+    data_df = pd.read_csv(DATA_FILE)
+    fit_models(
+        {
+            "gpareto-reg": STAN_FILE_GPARETO_REG,
+            "normal-at-bats": STAN_FILE_NORMAL_AT_BATS
+        },
+        data_df
+    )
+#+end_src
+
+#+RESULTS:
+:results:
+#+begin_example
+15:39:18 - cmdstanpy - INFO - compiling stan file /Users/tedgro/Code/baseball/model-gpareto-reg.stan to exe file /Users/tedgro/Code/baseball/model-gpareto-reg
+15:39:23 - cmdstanpy - INFO - compiled model executable: /Users/tedgro/Code/baseball/model-gpareto-reg
+15:39:23 - cmdstanpy - WARNING - Stan compiler has produced 1 warnings:
+15:39:23 - cmdstanpy - WARNING - 
+--- Translating Stan model to C++ code ---
+bin/stanc --include-paths=/Users/tedgro/Code/baseball --o=/Users/tedgro/Code/baseball/model-gpareto-reg.hpp /Users/tedgro/Code/baseball/model-gpareto-reg.stan
+Warning in '/Users/tedgro/Code/baseball/gpareto.stan', line 9, column 6, included from
+'/Users/tedgro/Code/baseball/model-gpareto-reg.stan', line 2, column 0: fabs
+    is deprecated and will be removed in Stan 2.33.0. Use abs instead. This
+    can be automatically changed using the canonicalize flag for stanc
+
+--- Compiling, linking C++ code ---
+clang++ -std=c++1y -Wno-unknown-warning-option -Wno-tautological-compare -Wno-sign-compare -D_REENTRANT -Wno-ignored-attributes      -I stan/lib/stan_math/lib/tbb_2020.3/include    -O3 -I src -I stan/src -I lib/rapidjson_1.1.0/ -I lib/CLI11-1.9.1/ -I stan/lib/stan_math/ -I stan/lib/stan_math/lib/eigen_3.3.9 -I stan/lib/stan_math/lib/boost_1.78.0 -I stan/lib/stan_math/lib/sundials_6.1.1/include -I stan/lib/stan_math/lib/sundials_6.1.1/src/sundials    -DBOOST_DISABLE_ASSERTS          -c -include-pch stan/src/stan/model/model_header.hpp.gch -x c++ -o /Users/tedgro/Code/baseball/model-gpareto-reg.o /Users/tedgro/Code/baseball/model-gpareto-reg.hpp
+clang++ -std=c++1y -Wno-unknown-warning-option -Wno-tautological-compare -Wno-sign-compare -D_REENTRANT -Wno-ignored-attributes      -I stan/lib/stan_math/lib/tbb_2020.3/include    -O3 -I src -I stan/src -I lib/rapidjson_1.1.0/ -I lib/CLI11-1.9.1/ -I stan/lib/stan_math/ -I stan/lib/stan_math/lib/eigen_3.3.9 -I stan/lib/stan_math/lib/boost_1.78.0 -I stan/lib/stan_math/lib/sundials_6.1.1/include -I stan/lib/stan_math/lib/sundials_6.1.1/src/sundials    -DBOOST_DISABLE_ASSERTS                -Wl,-L,"/Users/tedgro/.cmdstan/cmdstan-2.30.1/stan/lib/stan_math/lib/tbb" -Wl,-rpath,"/Users/tedgro/.cmdstan/cmdstan-2.30.1/stan/lib/stan_math/lib/tbb"      /Users/tedgro/Code/baseball/model-gpareto-reg.o src/cmdstan/main.o        -Wl,-L,"/Users/tedgro/.cmdstan/cmdstan-2.30.1/stan/lib/stan_math/lib/tbb" -Wl,-rpath,"/Users/tedgro/.cmdstan/cmdstan-2.30.1/stan/lib/stan_math/lib/tbb"   stan/lib/stan_math/lib/sundials_6.1.1/lib/libsundials_nvecserial.a stan/lib/stan_math/lib/sundials_6.1.1/lib/libsundials_cvodes.a stan/lib/stan_math/lib/sundials_6.1.1/lib/libsundials_idas.a stan/lib/stan_math/lib/sundials_6.1.1/lib/libsundials_kinsol.a  stan/lib/stan_math/lib/tbb/libtbb.dylib stan/lib/stan_math/lib/tbb/libtbbmalloc.dylib stan/lib/stan_math/lib/tbb/libtbbmalloc_proxy.dylib -o /Users/tedgro/Code/baseball/model-gpareto-reg
+rm -f /Users/tedgro/Code/baseball/model-gpareto-reg.o
+15:39:23 - cmdstanpy - INFO - compiling stan file /Users/tedgro/Code/baseball/model-normal-at-bats.stan to exe file /Users/tedgro/Code/baseball/model-normal-at-bats
+15:39:28 - cmdstanpy - INFO - compiled model executable: /Users/tedgro/Code/baseball/model-normal-at-bats
+Fitting model gpareto-reg
+15:39:29 - cmdstanpy - INFO - CmdStan start processing
+15:39:29 - cmdstanpy - INFO - Chain [1] start processing
+15:39:29 - cmdstanpy - INFO - Chain [2] start processing
+15:39:29 - cmdstanpy - INFO - Chain [3] start processing
+15:39:29 - cmdstanpy - INFO - Chain [4] start processing
+15:39:31 - cmdstanpy - INFO - Chain [4] done processing
+15:39:31 - cmdstanpy - INFO - Chain [2] done processing
+15:39:31 - cmdstanpy - INFO - Chain [1] done processing
+15:39:31 - cmdstanpy - INFO - Chain [3] done processing
+/Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45913.011  12.623 -45936.300 -45889.500      0.304    0.215   
+diverging      0.000   0.000      0.000      0.000      0.000    0.000   
+sigma          5.005   0.263      4.542      5.510      0.003    0.002   
+k             -0.502   0.027     -0.554     -0.453      0.000    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp           1723.0    2122.0    1.0  
+diverging    4000.0    4000.0    NaN  
+sigma        5930.0    2611.0    1.0  
+k            5846.0    2741.0    1.0  
+Saving idata to idata-gpareto-reg.json
+Fitting model normal-at-bats
+15:39:32 - cmdstanpy - INFO - CmdStan start processing
+15:39:32 - cmdstanpy - INFO - Chain [1] start processing
+15:39:32 - cmdstanpy - INFO - Chain [2] start processing
+15:39:32 - cmdstanpy - INFO - Chain [3] start processing
+15:39:32 - cmdstanpy - INFO - Chain [4] start processing
+15:39:34 - cmdstanpy - INFO - Chain [2] done processing
+15:39:34 - cmdstanpy - INFO - Chain [4] done processing
+15:39:34 - cmdstanpy - INFO - Chain [1] done processing
+15:39:34 - cmdstanpy - INFO - Chain [3] done processing
+/Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45529.203  16.953 -45561.000 -45497.700      0.710    0.502   
+diverging      0.000   0.000      0.000      0.000      0.000    0.000   
+mu            -1.112   0.016     -1.144     -1.083      0.000    0.000   
+sigma          0.072   0.015      0.046      0.099      0.001    0.000   
+a_K            0.200   0.020      0.162      0.236      0.000    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp            575.0    1018.0   1.01  
+diverging    4000.0    4000.0    NaN  
+mu           3866.0    3293.0   1.00  
+sigma         902.0     881.0   1.00  
+a_K          3566.0    2893.0   1.00  
+Saving idata to idata-normal-at-bats.json
+#+end_example
+:end:
+
+** Analyse
+
+#+begin_src jupyter-python :tangle analyse_extra.py :eval never-exports
+import arviz as az
+from analyse import draw_alpha_plot
+
+PLOT_FILE = "alpha_plot_extra.png"
+
+if __name__ == "__main__":
+    data = pd.read_csv(DATA_FILE)
+    idata_gpareto = az.from_json("idata-gpareto-reg.json")
+    idata_normal = az.from_json("idata-normal-at-bats.json")
+    f, ax = draw_alpha_plot(idata_gpareto, idata_normal, data)
+    f.savefig(PLOT_FILE, bbox_inches="tight")    
+#+end_src
+
+[[./alpha_plot_extra.png]]
+
+Both of the interventions seem to have resulted in improvements - there is no
+longer an obvious bias in the orange bands as a function of number of at-bats,
+and the generalised pareto model no longer thinks that some players are capable
+of batting averages close to 1.
+
+I still don't think the orange model handles the low-data players correctly: it
+should be more uncertain about them I think.

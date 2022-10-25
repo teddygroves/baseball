@@ -25,10 +25,11 @@ def get_summary(idata):
     return pd.concat([summary_ss, summary_vars])
 
 
-def main():
-    model_normal = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_NORMAL)
-    model_gpareto = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_GPARETO)
-    data_df = pd.read_csv(DATA_FILE)
+def fit_models(model_file_dict, data_df):
+    model_dict = {
+        name: cmdstanpy.CmdStanModel(stan_file=stan_file)
+        for name, stan_file in model_file_dict.items()
+    }
     data_dict = {
         "N": data_df.shape[0],
         "y": data_df["y"].tolist(),
@@ -36,10 +37,10 @@ def main():
         "min_alpha": MIN_ALPHA,
         "max_alpha": MAX_ALPHA,
     }
-    for model, name in zip([model_normal, model_gpareto], ["normal", "gpareto"]):
+    for name, model in model_dict.items():
         sample_kwargs = (
             SAMPLE_KWARGS
-            if name != "gpareto"
+            if "gpareto" not in name
             else {**SAMPLE_KWARGS, **SAMPLE_KWARGS_GPARETO}
         )
         print(f"Fitting model {name}")
@@ -52,4 +53,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    data_df = pd.read_csv(DATA_FILE)
+    fit_models(
+        {"normal": STAN_FILE_NORMAL, "gpareto": STAN_FILE_GPARETO},
+        data_df
+    )

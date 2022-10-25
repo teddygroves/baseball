@@ -1,4 +1,4 @@
-# Created 2022-10-24 Mon 15:33
+# Created 2022-10-25 Tue 15:48
 #+title: Extreme value distributions for sports models
 #+author: Teddy Groves
 #+startup: overview
@@ -197,19 +197,25 @@ data {
   array[N] int<lower=0> K; // trials
   array[N] int<lower=0> y; // successes  
 }
+transformed data {
+  vector[N] log_K = log(to_vector(K));
+  vector[N] log_K_std = (log_K - mean(log_K)) / sd(log_K);
+}
 parameters {
   real mu; // population mean of success log-odds
   real<lower=0> sigma; // population sd of success log-odds
+  real a_K;
   vector[N] alpha_std; // success log-odds (standardized)
 }
 model {
+  a_K ~ normal(0, 0.1);
   mu ~ normal(-1, 1); // hyperprior
   sigma ~ normal(0, 1); // hyperprior
   alpha_std ~ normal(0, 1); // prior (hierarchical)
-  y ~ binomial_logit(K, mu + sigma * alpha_std); // likelihood
+  y ~ binomial_logit(K, mu + a_K * log_K_std + sigma * alpha_std); // likelihood
 }
 generated quantities {
-  vector[N] alpha = mu + sigma * alpha_std;
+  vector[N] alpha = mu + a_K * log_K_std + sigma * alpha_std;
 }
 #+end_src
 
@@ -284,10 +290,11 @@ def get_summary(idata):
     return pd.concat([summary_ss, summary_vars])
 
 
-def main():
-    model_normal = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_NORMAL)
-    model_gpareto = cmdstanpy.CmdStanModel(stan_file=STAN_FILE_GPARETO)
-    data_df = pd.read_csv(DATA_FILE)
+def fit_models(model_file_dict, data_df):
+    model_dict = {
+        name: cmdstanpy.CmdStanModel(stan_file=stan_file)
+        for name, stan_file in model_file_dict.items()
+    }
     data_dict = {
         "N": data_df.shape[0],
         "y": data_df["y"].tolist(),
@@ -295,10 +302,10 @@ def main():
         "min_alpha": MIN_ALPHA,
         "max_alpha": MAX_ALPHA,
     }
-    for model, name in zip([model_normal, model_gpareto], ["normal", "gpareto"]):
+    for name, model in model_dict.items():
         sample_kwargs = (
             SAMPLE_KWARGS
-            if name != "gpareto"
+            if "gpareto" not in name
             else {**SAMPLE_KWARGS, **SAMPLE_KWARGS_GPARETO}
         )
         print(f"Fitting model {name}")
@@ -311,9 +318,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    data_df = pd.read_csv(DATA_FILE)
+    fit_models(
+        {"normal": STAN_FILE_NORMAL, "gpareto": STAN_FILE_GPARETO},
+        data_df
+    )
 #+end_src
 
+#+results: 
+:results:
 #+begin_example
 15:29:12 - cmdstanpy - INFO - CmdStan start processing
 15:29:12 - cmdstanpy - INFO - Chain [1] start processing
@@ -369,6 +382,7 @@ Saving idata to idata-gpareto.json
 /Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
   (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
 #+end_example
+:END:
 
 * Analyse
 
@@ -390,10 +404,7 @@ DATA_FILE = "baseball-hits-2006.csv"
 ALPHA_PLOT_FILE = "alpha-plot.png"
 
 
-def draw_alpha_plot():
-    idata_gpareto = az.from_json("idata-gpareto.json")
-    idata_normal = az.from_json("idata-normal.json")
-    data = pd.read_csv(DATA_FILE).copy()
+def draw_alpha_plot(idata_gpareto, idata_normal, data):
     alpha_qs_gpareto, alpha_qs_normal = (
         idata.posterior["alpha"]
         .quantile([0.05, 0.95], dim=("chain", "draw"))
@@ -403,7 +414,7 @@ def draw_alpha_plot():
         .add_prefix(name + "_")
         for idata, name in zip([idata_gpareto, idata_normal], ["gpareto", "normal"])
     )
-    data = data.join(alpha_qs_gpareto).join(alpha_qs_normal)
+    data = data.copy().join(alpha_qs_gpareto).join(alpha_qs_normal)
     f, ax = plt.subplots(figsize=[12, 5])
     ax.scatter(data["K"], data["y"] / data["K"], label="Obs", color="black")
     for model, color in [("gpareto", "tab:blue"), ("normal", "tab:orange")]:
@@ -425,7 +436,10 @@ def draw_alpha_plot():
 
 
 if __name__ == "__main__":
-    f, ax = draw_alpha_plot()
+    data = pd.read_csv(DATA_FILE)
+    idata_gpareto = az.from_json("idata-gpareto.json")
+    idata_normal = az.from_json("idata-normal.json")
+    f, ax = draw_alpha_plot(idata_gpareto, idata_normal, data)
     f.savefig(ALPHA_PLOT_FILE, bbox_inches="tight")
 #+end_src
 
@@ -468,3 +482,173 @@ are a few things that would be nice to look into:
   using a different non-symmetrical distribution?
 - Answer some extreme-value type questions like "what is the probability of a
   batter having a true average greater than 0.6?"
+
+* Postscript: some more models!
+After I posted this analysis on the Stan discourse some people suggested that a)
+the generalised pareto model was under-regularised and b) that the normal model
+should have an effect for number of at-bats. I thought I'd better try out both
+of those ideas.
+
+** Normal model with effect for number of at-bats
+#+begin_src stan
+data {
+  int<lower=0> N; // items
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes  
+}
+transformed data {
+  vector[N] log_K = log(to_vector(K));
+  vector[N] log_K_std = (log_K - mean(log_K)) / sd(log_K);
+}
+parameters {
+  real mu; // population mean of success log-odds
+  real<lower=0> sigma; // population sd of success log-odds
+  real a_K;
+  vector[N] alpha_std; // success log-odds (standardized)
+}
+model {
+  a_K ~ normal(0, 0.1);
+  mu ~ normal(-1, 1); // hyperprior
+  sigma ~ normal(0, 1); // hyperprior
+  alpha_std ~ normal(0, 1); // prior (hierarchical)
+  y ~ binomial_logit(K, mu + a_K * log_K_std + sigma * alpha_std); // likelihood
+}
+generated quantities {
+  vector[N] alpha = mu + a_K * log_K_std + sigma * alpha_std;
+}
+#+end_src
+
+** Generalised Pareto model with more regularisation
+#+begin_src stan
+functions {
+#include gpareto.stan
+}
+data {
+  int<lower=0> N; // items
+  array[N] int<lower=0> K; // trials
+  array[N] int<lower=0> y; // successes
+  real min_alpha; // noone worse than this would be in the dataset
+  real max_alpha;
+}
+parameters {
+  real<lower=0> sigma; // scale parameter of generalised pareto distribution
+  real<lower=-sigma/(max_alpha-min_alpha)> k; // shape parameter of generalised pareto distribution
+  vector<lower=min_alpha,upper=max_alpha>[N] alpha; // success log-odds
+}
+model {
+  sigma ~ normal(0, 1); // hyperprior
+  alpha ~ gpareto(min_alpha, k, sigma); // prior (hierarchical)
+  alpha ~ normal(-1.38, 0.4);  // prob between 0.1 and 0.4 on prob scale
+  y ~ binomial_logit(K, alpha); // likelihood
+  // note no explicit prior for k
+}
+#+end_src
+
+
+** Fit
+#+begin_src jupyter-python
+import pandas as pd
+from sample import fit_models, DATA_FILE
+
+STAN_FILE_GPARETO_REG = "model-gpareto-reg.stan"
+STAN_FILE_NORMAL_AT_BATS = "model-normal-at-bats.stan"
+
+if __name__ == "__main__":
+    data_df = pd.read_csv(DATA_FILE)
+    fit_models(
+        {
+            "gpareto-reg": STAN_FILE_GPARETO_REG,
+            "normal-at-bats": STAN_FILE_NORMAL_AT_BATS
+        },
+        data_df
+    )
+#+end_src
+
+#+results: 
+:results:
+#+begin_example
+15:48:19 - cmdstanpy - INFO - CmdStan start processing
+15:48:19 - cmdstanpy - INFO - Chain [1] start processing
+15:48:19 - cmdstanpy - INFO - Chain [2] start processing
+15:48:19 - cmdstanpy - INFO - Chain [3] start processing
+15:48:19 - cmdstanpy - INFO - Chain [4] start processing
+Fitting model gpareto-reg
+15:48:21 - cmdstanpy - INFO - Chain [2] done processing
+15:48:21 - cmdstanpy - INFO - Chain [4] done processing
+15:48:22 - cmdstanpy - INFO - Chain [1] done processing
+15:48:22 - cmdstanpy - INFO - Chain [3] done processing
+15:48:22 - cmdstanpy - WARNING - Non-fatal error during sampling:
+Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-3.6074e+19, 3.56715e+20 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-2.34314e+23, 2.317e+24 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+	Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-7.01962e+23, 6.9413e+24 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-7.63958e+89, 7.55435e+90 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+Exception: Exception: k<0 and max(y-ymin)/sigma > -1/k; found k, sigma =-1.47948e+21, 1.46297e+22 (in '/Users/tedgro/Code/baseball/gpareto.stan', line 6, column 4, included from
+Consider re-running with show_console=True if the above output is unclear!
+/Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+15:48:23 - cmdstanpy - INFO - CmdStan start processing
+15:48:23 - cmdstanpy - INFO - Chain [1] start processing
+15:48:23 - cmdstanpy - INFO - Chain [2] start processing
+15:48:23 - cmdstanpy - INFO - Chain [3] start processing
+15:48:23 - cmdstanpy - INFO - Chain [4] start processing
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45912.996  12.865 -45936.700 -45888.800      0.331    0.234   
+diverging      0.000   0.000      0.000      0.000      0.000    0.000   
+sigma          5.007   0.257      4.538      5.496      0.003    0.002   
+k             -0.502   0.027     -0.552     -0.451      0.000    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp           1508.0    2200.0    1.0  
+diverging    4000.0    4000.0    NaN  
+sigma        6234.0    2598.0    1.0  
+k            6073.0    2516.0    1.0  
+Saving idata to idata-gpareto-reg.json
+Fitting model normal-at-bats
+15:48:24 - cmdstanpy - INFO - Chain [1] done processing
+15:48:24 - cmdstanpy - INFO - Chain [4] done processing
+15:48:24 - cmdstanpy - INFO - Chain [3] done processing
+15:48:24 - cmdstanpy - INFO - Chain [2] done processing
+/Users/tedgro/Code/baseball/.venv/lib/python3.10/site-packages/arviz/stats/diagnostics.py:586: RuntimeWarning: invalid value encountered in double_scalars
+  (between_chain_variance / within_chain_variance + num_samples - 1) / (num_samples)
+                mean      sd     hdi_3%    hdi_97%  mcse_mean  mcse_sd  \
+lp        -45529.894  16.457 -45562.000 -45499.700       0.59    0.418   
+diverging      0.000   0.000      0.000      0.000       0.00    0.000   
+mu            -1.113   0.017     -1.143     -1.080       0.00    0.000   
+sigma          0.072   0.014      0.045      0.097       0.00    0.000   
+a_K            0.200   0.021      0.159      0.236       0.00    0.000   
+
+           ess_bulk  ess_tail  r_hat  
+lp            780.0    1762.0   1.01  
+diverging    4000.0    4000.0    NaN  
+mu           4247.0    3259.0   1.00  
+sigma        1301.0    2060.0   1.00  
+a_K          4048.0    3163.0   1.00  
+Saving idata to idata-normal-at-bats.json
+#+end_example
+:END:
+
+** Analyse
+
+#+begin_src jupyter-python
+import arviz as az
+from analyse import draw_alpha_plot
+
+PLOT_FILE = "alpha_plot_extra.png"
+
+if __name__ == "__main__":
+    data = pd.read_csv(DATA_FILE)
+    idata_gpareto = az.from_json("idata-gpareto-reg.json")
+    idata_normal = az.from_json("idata-normal-at-bats.json")
+    f, ax = draw_alpha_plot(idata_gpareto, idata_normal, data)
+    f.savefig(PLOT_FILE, bbox_inches="tight")    
+#+end_src
+
+[[file:./alpha_plot_extra.png]]
+
+Both of the interventions seem to have resulted in improvements - there is no
+longer an obvious bias in the orange bands as a function of number of at-bats,
+and the generalised pareto model no longer thinks that some players are capable
+of batting averages close to 1.
+
+I still don't think the orange model handles the low-data players correctly: it
+should be more uncertain about them I think.
